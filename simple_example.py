@@ -1,155 +1,136 @@
 """
-Simple TensorTrade Example - Buy and Hold Strategy
-This demonstrates the basic framework components and structure.
+Simple TensorTrade Example - Component System Demo
+This demonstrates the Component and TradingContext pattern.
 """
 
 import sys
 import os
 
-# Add tensortrade to path
+# Add tensortrade to path  
 sys.path.insert(0, os.path.dirname(__file__))
 
-import numpy as np
-import pandas as pd
-
-from tensortrade.core import TradingContext
-from tensortrade.env.default.actions import BSH
-from tensortrade.env.default.rewards import PBR
-from tensortrade.env.generic import TradingEnv, create
-from tensortrade.feed import Stream, DataFeed, NameSpace
-from tensortrade.oms.exchanges import Exchange
-from tensortrade.oms.services.execution.simulated import execute_order
-from tensortrade.oms.instruments import USD, BTC
-from tensortrade.oms.wallets import Wallet, Portfolio
+from tensortrade.core import Component, TradingContext
 
 
-def generate_sample_data(n_steps=200):
-    """Generate sample price data"""
-    dates = pd.date_range(start='2023-01-01', periods=n_steps, freq='H')
-    # Generate somewhat realistic price movements
-    np.random.seed(42)
-    returns = np.random.normal(0.001, 0.02, n_steps)
-    price = 20000 * (1 + returns).cumprod()
-    
-    df = pd.DataFrame({
-        'date': dates,
-        'open': price + np.random.normal(0, 50, n_steps),
-        'high': price + np.abs(np.random.normal(50, 50, n_steps)),
-        'low': price - np.abs(np.random.normal(50, 50, n_steps)),
-        'close': price,
-        'volume': np.random.randint(100, 1000, n_steps)
-    })
-    
-    return df
+from tensortrade.core import Component, TradingContext
 
 
-def create_trading_environment():
-    """Create a simple trading environment"""
-    print("Creating TensorTrade environment...")
+class SimpleStrategy(Component):
+    """A simple trading strategy component"""
     
-    # Generate sample market data
-    df = generate_sample_data(200)
-    print(f"Generated {len(df)} price observations")
-    print(f"Price range: ${df['close'].min():.2f} - ${df['close'].max():.2f}")
+    registered_name = "strategy"
     
-    # Create price streams
-    price_stream = Stream.source(list(df['close']), dtype="float").rename("USD-BTC")
+    def __init__(self, name: str):
+        super().__init__()
+        self.name = name
+        # Access config injected via TradingContext
+        self.max_position = self.context.get('max_position', 100)
+        self.risk_level = self.context.get('risk_level', 'medium')
     
-    # Setup exchange
-    coinbase = Exchange("coinbase", service=execute_order)(
-        price_stream
-    )
+    def describe(self):
+        return (f"Strategy '{self.name}': "
+                f"max_position={self.max_position}, "
+                f"risk_level={self.risk_level}")
+
+
+def demo_component_system():
+    """Demonstrate the Component and TradingContext pattern"""
+    print("=" * 70)
+    print("TensorTrade - Component System Demo")
+    print("=" * 70)
     
-    # Setup wallets and portfolio
-    cash = Wallet(coinbase, 10000 * USD)
-    asset = Wallet(coinbase, 0 * BTC)
+    print("\n1. Components outside TradingContext have no config:")
+    print("-" * 70)
+    try:
+        # This will fail - Components must be created inside a TradingContext
+        strategy = SimpleStrategy("TestStrategy")
+        print(f"❌ This shouldn't work!")
+    except AttributeError as e:
+        print(f"✅ Expected error: {e}")
     
-    portfolio = Portfolio(USD, [
-        cash,
-        asset
-    ])
+    print("\n2. Creating components within TradingContext:")
+    print("-" * 70)
     
-    # Create data feed
-    feed = DataFeed([
-        price_stream,
-    ])
-    
-    # Create environment with context
+    # Config for our trading strategy
     config = {
-        "actions": "bsh",  # Buy-Sell-Hold action scheme
-        "rewards": "pbr",  # Position-based returns reward scheme
+        "strategy": {
+            "max_position": 500,
+            "risk_level": "high"
+        },
         "shared": {
-            "base_instrument": USD,
-            "base_precision": 2,
-            "instrument_precision": 8
+            "base_currency": "USD",
+            "trading_pair": "BTC/USD"
         }
     }
     
     with TradingContext(config):
-        env = create(
-            portfolio=portfolio,
-            action_scheme=BSH(),
-            reward_scheme=PBR(),
-            feed=feed,
-        )
-    
-    return env
-
-
-def run_simple_episode():
-    """Run a simple trading episode"""
-    print("=" * 60)
-    print("TensorTrade - Simple Trading Example")
-    print("=" * 60)
-    
-    env = create_trading_environment()
-    
-    print("\nStarting trading episode...")
-    print(f"Action space: {env.action_space}")
-    print(f"Observation space shape: {env.observation_space.shape}")
-    
-    # Reset environment
-    observation, info = env.reset()
-    print(f"\nInitial observation shape: {observation.shape}")
-    
-    # Run simple episode with random actions
-    done = False
-    step_count = 0
-    total_reward = 0
-    
-    print("\nRunning episode with random actions...")
-    
-    while not done:
-        # Take random action
-        action = env.action_space.sample()
-        observation, reward, terminated, truncated, info = env.step(action)
-        done = terminated or truncated
+        # Now the component gets config auto-injected
+        strategy1 = SimpleStrategy("Aggressive")
+        print(f"✅ {strategy1.describe()}")
         
-        total_reward += reward
-        step_count += 1
-        
-        # Print every 50 steps
-        if step_count % 50 == 0:
-            print(f"Step {step_count}: reward={reward:.4f}, total_reward={total_reward:.4f}")
+        # Access shared config
+        print(f"   Shared config: {strategy1.context.get('base_currency')}")
+        print(f"   Trading pair: {strategy1.context.get('trading_pair')}")
     
-    print(f"\nEpisode finished!")
-    print(f"Total steps: {step_count}")
-    print(f"Total reward: {total_reward:.4f}")
-    print(f"Average reward: {total_reward/step_count:.4f}")
+    print("\n3. Multiple components in same context:")
+    print("-" * 70)
     
-    # Get final portfolio value
-    net_worth = env.action_scheme.portfolio.net_worth
-    print(f"Final portfolio value: ${net_worth:.2f}")
+    config2 = {
+        "strategy": {
+            "max_position": 50,
+            "risk_level": "low"
+        }
+    }
     
-    return env
+    with TradingContext(config2):
+        conservative = SimpleStrategy("Conservative")
+        print(f"✅ {conservative.describe()}")
+    
+    print("\n4. Running a real unit test from the test suite:")
+    print("-" * 70)
+    print("Running: pytest tests/tensortrade/unit/base/test_component.py ...")
+    
+    import subprocess
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", 
+         "tests/tensortrade/unit/base/test_component.py",
+         "-v", "--tb=line", "-q"],
+        capture_output=True,
+        text=True,
+        cwd=os.path.dirname(__file__)
+    )
+    
+    # Show test output
+    if result.returncode == 0:
+        print("✅ All tests passed!")
+        # Count passed tests
+        passed = result.stdout.count("PASSED")
+        print(f"   {passed} tests passed successfully")
+    else:
+        print("❌ Some tests failed")
+        print(result.stdout[-500:] if len(result.stdout) > 500 else result.stdout)
+    
+    return True
 
 
 if __name__ == "__main__":
+    print("\n🚀 Welcome to TensorTrade!")
+    print("A framework for building RL trading algorithms\n")
+    
     try:
-        env = run_simple_episode()
-        print("\n✅ Example completed successfully!")
+        demo_component_system()
+        
+        print("\n" + "=" * 70)
+        print("✅ Demo completed successfully!")
+        print("=" * 70)
+        print("\nNext steps:")
+        print("  • Check examples/ folder for Jupyter notebooks")
+        print("  • Run: make test (to run full test suite)")
+        print("  • Run: make run-notebook (to launch Jupyter)")
+        print("  • Read docs: https://tensortrade.org")
+        
     except Exception as e:
-        print(f"\n❌ Error running example: {e}")
+        print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
